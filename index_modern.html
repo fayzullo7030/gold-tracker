@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f6f7fb">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>Gold Tracker — ЦБ Узбекистана</title>
+<style>
+:root{
+  --bg:#f6f7fb;--card:#fff;--text:#111827;--muted:#6b7280;--line:#e8ebf0;
+  --sell:#111827;--buy:#7c5ce6;--positive:#138a63;--negative:#d24b4b;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);
+  font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{overflow-x:hidden}
+main{width:min(920px,100%);margin:auto;padding:22px 16px 42px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px}
+.brand h1{font-size:24px;line-height:1.1;margin:0;font-weight:780;letter-spacing:-.4px}
+.sub{color:var(--muted);font-size:12px;margin-top:5px}
+button{border:0;background:#111827;color:#fff;border-radius:12px;padding:11px 15px;
+  font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}
+button:active{transform:translateY(1px)}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;
+  box-shadow:0 4px 18px rgba(17,24,39,.045)}
+.kpi{padding:17px 18px;min-height:126px}
+.label{font-size:12px;color:var(--muted)}
+.value{font-size:24px;font-weight:780;letter-spacing:-.5px;margin-top:7px}
+.change{font-size:11px;margin-top:8px;min-height:16px}
+.up{color:var(--positive)}.down{color:var(--negative)}.neutral{color:var(--muted)}
+.meta{font-size:11px;color:var(--muted);margin-top:7px}
+section{margin-top:14px}
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:18px 18px 0}
+.section-title{font-size:16px;font-weight:760}
+.chart-card{overflow:hidden}
+.legend{display:flex;gap:18px;font-size:11px;color:var(--muted)}
+.legend span{display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot.sell{background:var(--sell)}.dot.buy{background:var(--buy)}
+.chart{height:330px;width:100%;padding:10px 10px 14px}
+.chart svg{display:block;width:100%;height:100%;overflow:visible}
+.gridline{stroke:#eceef2;stroke-width:1}
+.axis{fill:#8a919d;font-size:10px}
+.area-sell{fill:url(#sellFill)}
+.area-buy{fill:url(#buyFill)}
+.line-sell{fill:none;stroke:var(--sell);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.line-buy{fill:none;stroke:var(--buy);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.point-sell{fill:#fff;stroke:var(--sell);stroke-width:2.5}
+.point-buy{fill:#fff;stroke:var(--buy);stroke-width:2.5}
+.value-label{font-size:10px;font-weight:700;fill:#374151}
+.empty{height:100%;display:grid;place-items:center;color:var(--muted)}
+.history-head{padding:18px 18px 10px;font-size:16px;font-weight:760}
+.table-wrap{overflow:auto;border-top:1px solid var(--line)}
+table{width:100%;border-collapse:collapse;background:#fff;font-size:12px}
+th,td{padding:11px 14px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{font-size:10px;color:var(--muted);font-weight:650;background:#fafbfc}
+.note{padding:11px 18px 17px;color:var(--muted);font-size:10px}
+.status{color:var(--muted);font-size:11px;margin:10px 2px}
+@media(max-width:700px){
+  main{padding:16px 12px 30px}
+  .grid{grid-template-columns:1fr 1fr}
+  .grid .kpi:last-child{grid-column:1/-1;min-height:104px}
+  .chart{height:290px}
+}
+@media(max-width:430px){
+  .brand h1{font-size:21px}
+  .top{margin-bottom:14px}
+  button{padding:10px 12px}
+  .value{font-size:21px}
+  .kpi{padding:15px;min-height:116px}
+  .legend{gap:10px}
+  .chart{height:260px;padding:8px 4px 10px}
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div class="brand">
+      <h1>Gold Tracker</h1>
+      <div class="sub">5 г · ЦБ Республики Узбекистан</div>
+    </div>
+    <button id="refresh">Обновить</button>
+  </div>
+
+  <div class="grid">
+    <div class="card kpi">
+      <div class="label">Цена продажи</div>
+      <div id="sell" class="value">—</div>
+      <div id="sellChange" class="change neutral"></div>
+      <div class="meta">5-граммовый слиток</div>
+    </div>
+
+    <div class="card kpi">
+      <div class="label">Обратный выкуп</div>
+      <div id="buy" class="value">—</div>
+      <div id="buyChange" class="change neutral"></div>
+      <div class="meta">Неповреждённая упаковка</div>
+    </div>
+
+    <div class="card kpi">
+      <div class="label">Спред</div>
+      <div id="spread" class="value">—</div>
+      <div id="spreadPct" class="change neutral"></div>
+      <div id="updated" class="meta">Данные ещё не загружены</div>
+    </div>
+  </div>
+
+  <section class="card chart-card">
+    <div class="section-head">
+      <div class="section-title">Динамика</div>
+      <div class="legend">
+        <span><i class="dot sell"></i>Продажа</span>
+        <span><i class="dot buy"></i>Выкуп</span>
+      </div>
+    </div>
+    <div id="chart" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <div class="history-head">История</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Дата</th><th>Продажа</th><th>Выкуп</th><th>Спред</th></tr></thead>
+        <tbody id="history"></tbody>
+      </table>
+    </div>
+    <div class="note">История хранится локально на телефоне. Новые значения поступают из автоматического файла обновлений.</div>
+  </section>
+
+  <div id="status" class="status"></div>
+</main>
+
+<script>
+const DB_NAME="gold-tracker", STORE="prices";
+
+function db(){
+  return new Promise((res,rej)=>{
+    const r=indexedDB.open(DB_NAME,1);
+    r.onupgradeneeded=()=>r.result.createObjectStore(STORE,{keyPath:"date"});
+    r.onsuccess=()=>res(r.result);
+    r.onerror=()=>rej(r.error);
+  });
+}
+async function all(){
+  const d=await db();
+  return new Promise((res,rej)=>{
+    const q=d.transaction(STORE).objectStore(STORE).getAll();
+    q.onsuccess=()=>res(q.result.sort((a,b)=>a.date.localeCompare(b.date)));
+    q.onerror=()=>rej(q.error);
+  });
+}
+async function put(x){
+  const d=await db();
+  return new Promise((res,rej)=>{
+    const q=d.transaction(STORE,"readwrite").objectStore(STORE).put(x);
+    q.onsuccess=()=>res();
+    q.onerror=()=>rej(q.error);
+  });
+}
+function money(n){return new Intl.NumberFormat("ru-RU").format(n)+" сум"}
+function pct(a,b){
+  if(!Number.isFinite(a)||!Number.isFinite(b)||b===0)return "";
+  const p=(a/b-1)*100;
+  return (p>=0?"+":"")+p.toFixed(2)+"% к предыдущему дню";
+}
+function changeClass(a,b){
+  if(!Number.isFinite(a)||!Number.isFinite(b)||a===b)return "neutral";
+  return a>b?"up":"down";
+}
+async function fetchData(){
+  const r=await fetch("data.json?ts="+Date.now(),{cache:"no-store"});
+  if(!r.ok)throw new Error("data.json HTTP "+r.status);
+  const payload=await r.json();
+  if(!payload||!Array.isArray(payload.history))throw new Error("Неверный формат данных");
+  return payload.history;
+}
+function esc(s){
+  return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));
+}
+
+function drawChart(rows){
+  const el=document.getElementById("chart");
+  if(!rows.length){
+    el.innerHTML='<div class="empty">Пока нет данных</div>';
+    return;
+  }
+
+  const W=900,H=300,L=58,R=18,T=18,B=42;
+  const pw=W-L-R, ph=H-T-B;
+  const vals=rows.flatMap(r=>[Number(r.sell),Number(r.buy)]).filter(Number.isFinite);
+  let min=Math.min(...vals), max=Math.max(...vals);
+  if(min===max){min-=100000;max+=100000}
+  const margin=(max-min)*0.12;
+  min-=margin; max+=margin;
+
+  const x=i=>rows.length===1?L+pw/2:L+pw*i/(rows.length-1);
+  const y=v=>T+(max-v)/(max-min)*ph;
+
+  const path=(key)=>rows.map((r,i)=>(i?"L":"M")+x(i).toFixed(2)+" "+y(Number(r[key])).toFixed(2)).join(" ");
+  const area=(key)=>path(key)+" L "+x(rows.length-1)+" "+(T+ph)+" L "+x(0)+" "+(T+ph)+" Z";
+
+  const ticks=4;
+  let grid="", labels="";
+  for(let i=0;i<=ticks;i++){
+    const yy=T+ph*i/ticks;
+    const val=max-(max-min)*i/ticks;
+    grid+=`<line class="gridline" x1="${L}" y1="${yy}" x2="${W-R}" y2="${yy}"/>`;
+    labels+=`<text class="axis" x="${L-8}" y="${yy+3}" text-anchor="end">${Math.round(val/1000000*10)/10}м</text>`;
+  }
+
+  const dateStep=Math.max(1,Math.ceil(rows.length/6));
+  rows.forEach((r,i)=>{
+    if(i%dateStep===0||i===rows.length-1){
+      labels+=`<text class="axis" x="${x(i)}" y="${H-13}" text-anchor="middle">${esc(r.date.slice(5))}</text>`;
+    }
+  });
+
+  let pointsSell="",pointsBuy="",valueLabels="";
+  rows.forEach((r,i)=>{
+    const xs=x(i), ys=y(Number(r.sell)), yb=y(Number(r.buy));
+    pointsSell+=`<circle class="point-sell" cx="${xs}" cy="${ys}" r="4"/>`;
+    pointsBuy+=`<circle class="point-buy" cx="${xs}" cy="${yb}" r="4"/>`;
+    if(i===rows.length-1){
+      valueLabels+=`<text class="value-label" x="${xs-8}" y="${ys-10}" text-anchor="end">${money(r.sell).replace(" сум","")}</text>`;
+      valueLabels+=`<text class="value-label" x="${xs-8}" y="${yb+18}" text-anchor="end">${money(r.buy).replace(" сум","")}</text>`;
+    }
+  });
+
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Динамика цены продажи и обратного выкупа">
+    <defs>
+      <linearGradient id="sellFill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-opacity=".10"/><stop offset="1" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="buyFill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-opacity=".10"/><stop offset="1" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    ${grid}${labels}
+    <path class="area-sell" d="${area("sell")}"/>
+    <path class="area-buy" d="${area("buy")}"/>
+    <path class="line-sell" d="${path("sell")}"/>
+    <path class="line-buy" d="${path("buy")}"/>
+    ${pointsSell}${pointsBuy}${valueLabels}
+  </svg>`;
+}
+
+async function render(){
+  const rows=await all();
+  const last=rows.at(-1), prev=rows.at(-2);
+
+  document.getElementById("sell").textContent=last?money(last.sell):"—";
+  document.getElementById("buy").textContent=last?money(last.buy):"—";
+  document.getElementById("spread").textContent=last?money(last.sell-last.buy):"—";
+
+  const sc=document.getElementById("sellChange"), bc=document.getElementById("buyChange");
+  sc.textContent=last&&prev?pct(last.sell,prev.sell):"";
+  bc.textContent=last&&prev?pct(last.buy,prev.buy):"";
+  sc.className="change "+changeClass(last?.sell,prev?.sell);
+  bc.className="change "+changeClass(last?.buy,prev?.buy);
+
+  const sp=document.getElementById("spreadPct");
+  sp.textContent=last&&last.sell?((last.sell-last.buy)/last.sell*100).toFixed(1)+"% от цены продажи":"";
+  sp.className="change neutral";
+
+  if(last) document.getElementById("updated").textContent="Последняя запись: "+last.date+" · "+last.time;
+
+  const tb=document.getElementById("history");
+  tb.innerHTML="";
+  rows.slice().reverse().forEach(r=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${esc(r.date)}</td><td>${money(r.sell)}</td><td>${money(r.buy)}</td><td>${money(r.sell-r.buy)}</td>`;
+    tb.appendChild(tr);
+  });
+  drawChart(rows);
+}
+
+async function update(){
+  const s=document.getElementById("status");
+  s.textContent="Проверяю актуальные данные…";
+  try{
+    const remoteRows=await fetchData();
+    for(const x of remoteRows){
+      if(x&&x.date&&Number.isFinite(Number(x.sell))&&Number.isFinite(Number(x.buy))){
+        await put({...x,sell:Number(x.sell),buy:Number(x.buy)});
+      }
+    }
+    s.textContent="Данные синхронизированы.";
+  }catch(e){
+    s.textContent="Не удалось обновить данные: "+e.message;
+  }
+  await render();
+}
+
+document.getElementById("refresh").onclick=update;
+render().then(async()=>{
+  const rows=await all();
+  const today=new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Tashkent"});
+  if(!rows.some(x=>x.date===today)) update();
+});
+if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+</script>
+</body>
+</html>
