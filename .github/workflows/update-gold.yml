@@ -16,7 +16,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get CBU gold price
+      - name: Update data
         run: |
           python - <<'PY'
           import json
@@ -25,11 +25,11 @@ jobs:
           from datetime import datetime
           from zoneinfo import ZoneInfo
 
-          url = "https://cbu.uz/ru/banknotes-coins/gold-bars/prices/"
+          URL = "https://cbu.uz/ru/banknotes-coins/gold-bars/prices/"
 
           req = urllib.request.Request(
-              url,
-              headers={"User-Agent": "GoldTracker/1.0"}
+              URL,
+              headers={"User-Agent": "Mozilla/5.0"}
           )
 
           html = urllib.request.urlopen(req, timeout=30).read().decode(
@@ -40,22 +40,20 @@ jobs:
           text = re.sub(r"\s+", " ", text)
 
           match = re.search(
-              r"5\s*грамм.*?(\d[\d\s]*?)\s*сум.*?(\d[\d\s]*?)\s*сум",
+              r"5\s*грамм\s+([\d\s\u00a0]+)\s*сум\s+"
+              r"([\d\s\u00a0]+)\s*сум",
               text,
-              re.IGNORECASE
+              re.I
           )
 
           if not match:
-              raise Exception("Строка 5 грамм не найдена")
+              raise Exception("Не найдена строка 5 грамм")
 
-          def number(value):
-              return int(re.sub(r"\D", "", value))
+          def num(x):
+              return int(re.sub(r"\D", "", x))
 
-          sell = number(match.group(1))
-          buy = number(match.group(2))
-
-          if sell < 1000000 or buy < 1000000:
-              raise Exception("Получены подозрительные значения")
+          sell = num(match.group(1))
+          buy = num(match.group(2))
 
           now = datetime.now(ZoneInfo("Asia/Tashkent"))
 
@@ -66,35 +64,25 @@ jobs:
               "buy": buy
           }
 
-          try:
-              with open("data.json", "r", encoding="utf-8") as f:
-                  data = json.load(f)
-          except FileNotFoundError:
-              data = {
-                  "source": url,
-                  "history": []
-              }
+          with open("data.json", encoding="utf-8") as f:
+              data = json.load(f)
 
           history = [
-              x for x in data.get("history", [])
-              if x.get("date") != row["date"]
+              x for x in data["history"]
+              if x["date"] != row["date"]
           ]
 
           history.append(row)
           history.sort(key=lambda x: x["date"])
 
-          data["source"] = url
-          data["updated"] = now.isoformat()
           data["history"] = history
+          data["updated"] = now.isoformat()
 
           with open("data.json", "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False, indent=2)
-
-          print("Продажа:", sell)
-          print("Выкуп:", buy)
           PY
 
-      - name: Save updated data
+      - name: Save data
         run: |
           git config user.name "gold-tracker-bot"
           git config user.email "actions@users.noreply.github.com"
