@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>Gold Tracker — ЦБ Узбекистана</title>
+<style>
+:root{--bg:#f5f7fb;--card:#fff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;--accent:#111827;--up:#087f5b;--down:#c92a2a}
+*{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:760px;margin:auto;padding:18px 14px 40px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+h1{font-size:22px;margin:0}.sub{color:var(--muted);font-size:12px;margin-top:3px}
+button{border:0;border-radius:12px;background:var(--accent);color:#fff;padding:10px 13px;font-weight:600;cursor:pointer}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:17px;box-shadow:0 2px 10px #00000008}
+.label{color:var(--muted);font-size:12px}.value{font-size:25px;font-weight:750;margin-top:5px}.change{font-size:12px;margin-top:6px}.up{color:var(--up)}.down{color:var(--down)}
+section{margin-top:14px}.section-title{font-weight:700;margin:0 0 9px}.status{color:var(--muted);font-size:12px;margin:9px 2px}
+.chart-wrap{height:300px}.table-wrap{overflow:auto;border-radius:14px;border:1px solid var(--line)}
+table{width:100%;border-collapse:collapse;background:#fff;font-size:13px}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}th{font-size:11px;color:var(--muted);font-weight:600}
+.empty{padding:25px;text-align:center;color:var(--muted)}.note{font-size:11px;color:var(--muted);margin-top:12px}
+@media(max-width:520px){.grid{grid-template-columns:1fr}.value{font-size:23px}}
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div><h1>Gold Tracker</h1><div class="sub">5 г · ЦБ Республики Узбекистан</div></div>
+    <button id="refresh">Обновить</button>
+  </div>
+
+  <div class="grid">
+    <div class="card"><div class="label">Цена продажи</div><div id="sell" class="value">—</div><div id="sellChange" class="change"></div></div>
+    <div class="card"><div class="label">Обратный выкуп · упаковка цела</div><div id="buy" class="value">—</div><div id="buyChange" class="change"></div></div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <div class="label">Спред</div><div id="spread" class="value">—</div>
+    <div id="updated" class="status">Данные ещё не загружены</div>
+  </div>
+
+  <section class="card">
+    <div class="section-title">Динамика</div>
+    <div class="chart-wrap"><canvas id="chart"></canvas></div>
+  </section>
+
+  <section>
+    <div class="section-title">История</div>
+    <div class="table-wrap"><table><thead><tr><th>Дата</th><th>Продажа</th><th>Выкуп</th><th>Спред</th></tr></thead><tbody id="history"></tbody></table></div>
+    <div class="note">История на телефоне хранится локально. Общий источник новых данных — автоматический файл обновлений.</div>
+  </section>
+
+  <div id="status" class="status"></div>
+</main>
+<script>
+const CBU_URL="https://cbu.uz/ru/banknotes-coins/gold-bars/prices/";
+const DB_NAME="gold-tracker", STORE="prices";
+
+function db(){return new Promise((res,rej)=>{let r=indexedDB.open(DB_NAME,1);r.onupgradeneeded=()=>r.result.createObjectStore(STORE,{keyPath:"date"});r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+async function all(){let d=await db();return new Promise((res,rej)=>{let q=d.transaction(STORE).objectStore(STORE).getAll();q.onsuccess=()=>res(q.result.sort((a,b)=>a.date.localeCompare(b.date)));q.onerror=()=>rej(q.error)})}
+async function put(x){let d=await db();return new Promise((res,rej)=>{let q=d.transaction(STORE,"readwrite").objectStore(STORE).put(x);q.onsuccess=()=>res();q.onerror=()=>rej(q.error)})}
+
+function money(n){return new Intl.NumberFormat("ru-RU").format(n)+" сум"}
+function parsePrice(s){return Number(String(s).replace(/[^\d]/g,""))}
+
+async function fetchCBU(){
+  const r=await fetch("data.json?ts="+Date.now(),{cache:"no-store"});
+  if(!r.ok) throw new Error("data.json HTTP "+r.status);
+  const payload=await r.json();
+  if(!payload || !Array.isArray(payload.history)) throw new Error("Неверный формат данных");
+  return payload.history;
+}
+function pct(a,b){if(!b)return"";let p=(a/b-1)*100;return (p>=0?"+":"")+p.toFixed(2)+"% к предыдущему дню"}
+
+function draw(rows){
+ const c=document.getElementById("chart"), ctx=c.getContext("2d"), dpr=devicePixelRatio||1, w=c.clientWidth, h=c.clientHeight;
+ c.width=w*dpr;c.height=h*dpr;ctx.scale(dpr,dpr);ctx.clearRect(0,0,w,h);
+ if(rows.length===0){ctx.fillStyle="#6b7280";ctx.textAlign="center";ctx.fillText("Пока нет данных",w/2,h/2);return}
+ const pad={l:48,r:14,t:14,b:32}, W=w-pad.l-pad.r,H=h-pad.t-pad.b;
+ const vals=rows.flatMap(x=>[x.sell,x.buy]), min=Math.min(...vals),max=Math.max(...vals), span=Math.max(1,max-min), y=v=>pad.t+(max-v)/span*H;
+ ctx.strokeStyle="#e5e7eb";ctx.lineWidth=1;for(let i=0;i<=4;i++){let yy=pad.t+H*i/4;ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke()}
+ function line(key){
+   ctx.beginPath();rows.forEach((r,i)=>{let x=pad.l+(rows.length===1?W/2:W*i/(rows.length-1)),yy=y(r[key]);i?ctx.lineTo(x,yy):ctx.moveTo(x,yy)});ctx.strokeStyle=key==="sell"?"#111827":"#8b5cf6";ctx.lineWidth=2;ctx.stroke();
+   rows.forEach((r,i)=>{let x=pad.l+(rows.length===1?W/2:W*i/(rows.length-1)),yy=y(r[key]);ctx.beginPath();ctx.arc(x,yy,3,0,Math.PI*2);ctx.fillStyle=key==="sell"?"#111827":"#8b5cf6";ctx.fill()})
+ }
+ line("sell");line("buy");
+ ctx.fillStyle="#6b7280";ctx.font="11px system-ui";ctx.textAlign="center";
+ const step=Math.max(1,Math.ceil(rows.length/6));rows.forEach((r,i)=>{if(i%step===0||i===rows.length-1){let x=pad.l+(rows.length===1?W/2:W*i/(rows.length-1));ctx.fillText(r.date.slice(5),x,h-9)}})
+}
+
+async function render(){
+ const rows=await all();const last=rows.at(-1),prev=rows.at(-2);
+ document.getElementById("sell").textContent=last?money(last.sell):"—";
+ document.getElementById("buy").textContent=last?money(last.buy):"—";
+ document.getElementById("spread").textContent=last?money(last.sell-last.buy):"—";
+ document.getElementById("sellChange").textContent=last&&prev?pct(last.sell,prev.sell):"";
+ document.getElementById("buyChange").textContent=last&&prev?pct(last.buy,prev.buy):"";
+ if(last) document.getElementById("updated").textContent="Последняя запись: "+last.date+" · "+last.time;
+ const tb=document.getElementById("history");tb.innerHTML="";
+ rows.slice().reverse().forEach(r=>{let tr=document.createElement("tr");tr.innerHTML=`<td>${r.date}</td><td>${money(r.sell)}</td><td>${money(r.buy)}</td><td>${money(r.sell-r.buy)}</td>`;tb.appendChild(tr)});
+ draw(rows);
+}
+
+async function update(){
+ const s=document.getElementById("status");s.textContent="Проверяю актуальные данные…";
+ try{
+   const remoteRows=await fetchCBU();
+   for(const x of remoteRows){
+     if(x && x.date && Number.isFinite(x.sell) && Number.isFinite(x.buy)) await put(x);
+   }
+   s.textContent="Данные синхронизированы.";
+ }catch(e){
+   s.textContent="Не удалось обновить данные: "+e.message;
+ }
+ await render();
+}
+document.getElementById("refresh").onclick=update;
+render().then(async()=>{let rows=await all(), today=new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Tashkent"});if(!rows.some(x=>x.date===today)) update()});
+if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+</script>
+</body>
+</html>
