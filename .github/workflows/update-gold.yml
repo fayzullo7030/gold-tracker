@@ -2,7 +2,8 @@ name: Update gold prices
 
 on:
   schedule:
-    - cron: "35 4 * * *"
+    - cron: "5 5 * * *"
+    - cron: "30 5 * * *"
   workflow_dispatch:
 
 permissions:
@@ -36,7 +37,21 @@ jobs:
               "utf-8", "ignore"
           )
 
-          text = re.sub(r"<[^>]+>", " ", html)
+          text = re.sub(
+              r"<script\b[^>]*>.*?</script>",
+              " ",
+              html,
+              flags=re.I | re.S
+          )
+
+          text = re.sub(
+              r"<style\b[^>]*>.*?</style>",
+              " ",
+              text,
+              flags=re.I | re.S
+          )
+
+          text = re.sub(r"<[^>]+>", " ", text)
           text = re.sub(r"\s+", " ", text)
 
           match = re.search(
@@ -55,6 +70,11 @@ jobs:
           sell = num(match.group(1))
           buy = num(match.group(2))
 
+          if sell <= 0 or buy <= 0:
+              raise Exception(
+                  f"Некорректные значения: {sell}, {buy}"
+              )
+
           now = datetime.now(ZoneInfo("Asia/Tashkent"))
 
           row = {
@@ -68,18 +88,29 @@ jobs:
               data = json.load(f)
 
           history = [
-              x for x in data["history"]
-              if x["date"] != row["date"]
+              x for x in data.get("history", [])
+              if x.get("date") != row["date"]
           ]
 
           history.append(row)
           history.sort(key=lambda x: x["date"])
 
           data["history"] = history
+          data["source"] = URL
           data["updated"] = now.isoformat()
 
           with open("data.json", "w", encoding="utf-8") as f:
-              json.dump(data, f, ensure_ascii=False, indent=2)
+              json.dump(
+                  data,
+                  f,
+                  ensure_ascii=False,
+                  indent=2
+              )
+              f.write("\n")
+
+          print(f"Обновлено: {row['date']} {row['time']}")
+          print(f"Продажа 5 г: {sell}")
+          print(f"Выкуп 5 г: {buy}")
           PY
 
       - name: Save data
