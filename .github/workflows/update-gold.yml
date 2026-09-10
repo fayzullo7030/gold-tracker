@@ -2,8 +2,9 @@ name: Update gold prices
 
 on:
   schedule:
+    # 10:05 Asia/Tashkent = 05:05 UTC
     - cron: "5 5 * * *"
-    - cron: "30 5 * * *"
+
   workflow_dispatch:
 
 permissions:
@@ -17,7 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Update data
+      - name: Update gold price
         run: |
           python - <<'PY'
           import json
@@ -37,6 +38,7 @@ jobs:
               "utf-8", "ignore"
           )
 
+          # Убираем scripts/styles/HTML
           text = re.sub(
               r"<script\b[^>]*>.*?</script>",
               " ",
@@ -54,18 +56,69 @@ jobs:
           text = re.sub(r"<[^>]+>", " ", text)
           text = re.sub(r"\s+", " ", text)
 
+          # -----------------------------------------
+          # 1. Получаем дату и время обновления ЦБ
+          # -----------------------------------------
+
+          date_match = re.search(
+              r"Дата обновления:\s*"
+              r"(\d{1,2})\s+"
+              r"(янв|фев|мар|апр|май|июн|июл|авг|сен|окт|ноя|дек)"
+              r"\s+(\d{4}),\s*(\d{2}:\d{2})",
+              text,
+              re.I
+          )
+
+          if not date_match:
+              raise Exception(
+                  "Не удалось найти 'Дата обновления' на сайте ЦБ"
+              )
+
+          day = int(date_match.group(1))
+          month_name = date_match.group(2).lower()
+          year = int(date_match.group(3))
+          update_time = date_match.group(4)
+
+          months = {
+              "янв": 1,
+              "фев": 2,
+              "мар": 3,
+              "апр": 4,
+              "май": 5,
+              "июн": 6,
+              "июл": 7,
+              "авг": 8,
+              "сен": 9,
+              "окт": 10,
+              "ноя": 11,
+              "дек": 12
+          }
+
+          update_date = datetime(
+              year,
+              months[month_name],
+              day
+          ).strftime("%Y-%m-%d")
+
+          # -----------------------------------------
+          # 2. Получаем строку 5 грамм
+          # -----------------------------------------
+
           match = re.search(
-              r"5\s*грамм\s+([\d\s\u00a0]+)\s*сум\s+"
+              r"5\s*грамм\s+"
+              r"([\d\s\u00a0]+)\s*сум\s+"
               r"([\d\s\u00a0]+)\s*сум",
               text,
               re.I
           )
 
           if not match:
-              raise Exception("Не найдена строка 5 грамм")
+              raise Exception(
+                  "Не удалось найти строку 5 грамм"
+              )
 
-          def num(x):
-              return int(re.sub(r"\D", "", x))
+          def num(value):
+              return int(re.sub(r"\D", "", value))
 
           sell = num(match.group(1))
           buy = num(match.group(2))
@@ -75,11 +128,13 @@ jobs:
                   f"Некорректные значения: {sell}, {buy}"
               )
 
-          now = datetime.now(ZoneInfo("Asia/Tashkent"))
+          # -----------------------------------------
+          # 3. Сохраняем именно дату ЦБ
+          # -----------------------------------------
 
           row = {
-              "date": now.strftime("%Y-%m-%d"),
-              "time": now.strftime("%H:%M"),
+              "date": update_date,
+              "time": update_time,
               "sell": sell,
               "buy": buy
           }
@@ -89,7 +144,7 @@ jobs:
 
           history = [
               x for x in data.get("history", [])
-              if x.get("date") != row["date"]
+              if x.get("date") != update_date
           ]
 
           history.append(row)
@@ -97,7 +152,12 @@ jobs:
 
           data["history"] = history
           data["source"] = URL
-          data["updated"] = now.isoformat()
+
+          now = datetime.now(
+              ZoneInfo("Asia/Tashkent")
+          )
+
+          data["checked"] = now.isoformat()
 
           with open("data.json", "w", encoding="utf-8") as f:
               json.dump(
@@ -108,15 +168,20 @@ jobs:
               )
               f.write("\n")
 
-          print(f"Обновлено: {row['date']} {row['time']}")
-          print(f"Продажа 5 г: {sell}")
-          print(f"Выкуп 5 г: {buy}")
+          print("Дата ЦБ:", update_date)
+          print("Время ЦБ:", update_time)
+          print("Продажа 5 г:", sell)
+          print("Выкуп 5 г:", buy)
           PY
 
       - name: Save data
         run: |
           git config user.name "gold-tracker-bot"
           git config user.email "actions@users.noreply.github.com"
+
           git add data.json
-          git diff --cached --quiet || git commit -m "Update gold price"
+
+          git diff --cached --quiet || \
+            git commit -m "Update gold price"
+
           git push
