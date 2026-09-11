@@ -2,10 +2,9 @@ name: Update gold prices
 
 on:
   schedule:
-    # 10:05 по Ташкенту (UTC+5)
-    - cron: "5 5 * * *"
+    # Каждый день утром по времени Узбекистана (UTC+5)
+    - cron: "0 5 * * *"
 
-  # Возможность запустить вручную из GitHub Actions
   workflow_dispatch:
 
 permissions:
@@ -20,228 +19,258 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Get gold prices from CBU
+        shell: bash
         run: |
           python - <<'PY'
           import json
           import re
           import urllib.request
-          from datetime import datetime
-          from zoneinfo import ZoneInfo
+          from datetime import datetime, timezone, timedelta
 
-          URL = "https://cbu.uz/ru/banknotes-coins/gold-bars/prices/"
+          URL = "https://cbu.uz/ru/banknotes-coins/gold-bars/info/"
 
           print("Получаю данные ЦБ...")
 
-          request = urllib.request.Request(
+          req = urllib.request.Request(
               URL,
               headers={
-                  "User-Agent": "Mozilla/5.0 (compatible; GoldTracker/1.0)"
+                  "User-Agent": (
+                      "Mozilla/5.0 (Linux; Android 10) "
+                      "AppleWebKit/537.36 Chrome/120 Safari/537.36"
+                  ),
+                  "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"
               }
           )
 
-          with urllib.request.urlopen(request, timeout=30) as response:
-              html = response.read().decode("utf-8", "ignore")
-
-          # Удаляем scripts и styles
-          text = re.sub(
-              r"<script\b[^>]*>.*?</script>",
-              " ",
-              html,
-              flags=re.I | re.S
-          )
-
-          text = re.sub(
-              r"<style\b[^>]*>.*?</style>",
-              " ",
-              text,
-              flags=re.I | re.S
-          )
-
-          # Удаляем HTML-теги
-          text = re.sub(r"<[^>]+>", " ", text)
-
-          # Нормализуем пробелы
-          text = text.replace("\xa0", " ")
-          text = re.sub(r"\s+", " ", text).strip()
+          with urllib.request.urlopen(req, timeout=30) as response:
+              html = response.read().decode("utf-8", errors="ignore")
 
           print("Страница ЦБ получена.")
 
-          # -------------------------------------------------
-          # 1. Находим ФАКТИЧЕСКУЮ дату и время обновления ЦБ
-          # -------------------------------------------------
+          # ---------------------------------------------------------
+          # Убираем HTML-разметку, чтобы искать данные в обычном тексте
+          # ---------------------------------------------------------
 
-          date_pattern = re.compile(
-              r"Дата\s+обновления\s*:\s*"
-              r"(\d{1,2})\s+"
-              r"(янв|фев|мар|апр|май|июн|июл|авг|сен|окт|ноя|дек)"
-              r"\s+(\d{4})\s*,\s*"
-              r"(\d{2}:\d{2})",
-              re.I
-          )
+          text = re.sub(r"<script\b[^>]*>.*?</script>", " ", html,
+                        flags=re.I | re.S)
+          text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text,
+                        flags=re.I | re.S)
+          text = re.sub(r"<[^>]+>", " ", text)
+          text = re.sub(r"&nbsp;", " ", text, flags=re.I)
+          text = re.sub(r"&amp;", "&", text, flags=re.I)
+          text = re.sub(r"\s+", " ", text).strip()
 
-          date_match = date_pattern.search(text)
+          # ---------------------------------------------------------
+          # 1. Ищем дату обновления ЦБ
+          # ---------------------------------------------------------
 
-          if not date_match:
-              raise RuntimeError(
-                  "ОШИБКА: не найдена строка 'Дата обновления' на странице ЦБ."
+          date_patterns = [
+              r"Дата\s+обновления\s*[:\-]?\s*"
+              r"(\d{1,2}\s+[А-Яа-яЁё]+\s+20\d{2})",
+
+              r"Дата\s+обновления\s*[:\-]?\s*"
+              r"(\d{1,2}[./-]\d{1,2}[./-]20\d{2})",
+
+              r"Дата\s+обновления\s*[:\-]?\s*"
+              r"(\d{4}-\d{2}-\d{2})"
+          ]
+
+          update_date = None
+
+          for pattern in date_patterns:
+              match = re.search(pattern, text, re.I)
+              if match:
+                  update_date = match.group(1).strip()
+                  break
+
+          if update_date:
+              print("Дата обновления ЦБ:", update_date)
+          else:
+              print(
+                  "Предупреждение: дата обновления ЦБ не найдена. "
+                  "Продолжаю поиск цены."
               )
 
-          day = int(date_match.group(1))
-          month_name = date_match.group(2).lower()
-          year = int(date_match.group(3))
-          update_time = date_match.group(4)
+          # ---------------------------------------------------------
+          # 2. Ищем строку для слитка 5 г
+          # ---------------------------------------------------------
 
-          months = {
-              "янв": 1,
-              "фев": 2,
-              "мар": 3,
-              "апр": 4,
-              "май": 5,
-              "июн": 6,
-              "июл": 7,
-              "авг": 8,
-              "сен": 9,
-              "окт": 10,
-              "ноя": 11,
-              "дек": 12
+          # Возможные варианты записи цены:
+          # 9 045 000
+          # 9 045 000
+          # 9045000
+          # 9,045,000
+
+          number = r"[\d\s\u00A0.,]+"
+
+          patterns_5g = [
+              # 5 г ... продажа ... выкуп
+              rf"5\s*г(?:рамм(?:а|ов)?)?.{{0,1000}}?"
+              rf"({number})\s*(?:сум|UZS)?.{{0,300}}?"
+              rf"({number})\s*(?:сум|UZS)?",
+
+              # Если в таблице сначала указан вес, затем цены
+              rf"5\s*гр?\.?.{{0,500}}?({number}).{{0,300}}?({number})"
+          ]
+
+          sell = None
+          buy = None
+
+          def clean_number(value):
+              value = value.replace("\u00A0", "")
+              value = value.replace(" ", "")
+              value = value.replace(",", "")
+              value = value.replace(".", "")
+              return int(value)
+
+          for pattern in patterns_5g:
+              match = re.search(pattern, text, re.I)
+
+              if not match:
+                  continue
+
+              try:
+                  a = clean_number(match.group(1))
+                  b = clean_number(match.group(2))
+
+                  # Отбрасываем явно нереалистичные значения
+                  candidates = [a, b]
+
+                  candidates = [
+                      x for x in candidates
+                      if 1_000_000 <= x <= 100_000_000
+                  ]
+
+                  if len(candidates) == 2:
+                      # В таблице ЦБ цена продажи выше цены выкупа
+                      sell = max(candidates)
+                      buy = min(candidates)
+                      break
+
+              except Exception:
+                  pass
+
+          # ---------------------------------------------------------
+          # 3. Дополнительный поиск по HTML,
+          #    если обычный текст не сработал
+          # ---------------------------------------------------------
+
+          if sell is None or buy is None:
+
+              # Ищем фрагменты вокруг "5 г"
+              positions = [
+                  m.start()
+                  for m in re.finditer(r"5\s*(?:г|гр|грамм)",
+                                        html, re.I)
+              ]
+
+              for pos in positions:
+                  fragment = html[max(0, pos - 300):pos + 2500]
+
+                  nums = re.findall(
+                      r"\b\d{1,3}(?:[\s\u00A0.,]\d{3})+\b|\b\d{7,8}\b",
+                      fragment
+                  )
+
+                  values = []
+
+                  for n in nums:
+                      try:
+                          v = clean_number(n)
+                          if 1_000_000 <= v <= 100_000_000:
+                              values.append(v)
+                      except Exception:
+                          pass
+
+                  # Берём уникальные значения
+                  values = list(dict.fromkeys(values))
+
+                  if len(values) >= 2:
+                      sell = max(values)
+                      buy = min(values)
+                      break
+
+          if sell is None or buy is None:
+              raise RuntimeError(
+                  "Не удалось определить цены для слитка 5 г "
+                  "на странице ЦБ. Структура страницы могла измениться."
+              )
+
+          print("Продажа 5 г:", sell)
+          print("Выкуп 5 г:", buy)
+
+          # ---------------------------------------------------------
+          # 4. Сохраняем данные
+          # ---------------------------------------------------------
+
+          uzbekistan_tz = timezone(timedelta(hours=5))
+          checked_at = datetime.now(uzbekistan_tz).isoformat()
+
+          data = {
+              "source": URL,
+              "updated": checked_at,
+              "cbu_update_date": update_date,
+              "history": []
           }
 
-          if month_name not in months:
-              raise RuntimeError(
-                  f"ОШИБКА: неизвестный месяц: {month_name}"
-              )
+          try:
+              with open("data.json", "r", encoding="utf-8") as f:
+                  old = json.load(f)
 
-          update_date = f"{year:04d}-{months[month_name]:02d}-{day:02d}"
+              if isinstance(old, dict):
+                  data["history"] = old.get("history", [])
 
-          cbu_updated = (
-              f"{update_date}T{update_time}:00+05:00"
-          )
-
-          print(f"Дата обновления ЦБ: {update_date}")
-          print(f"Время обновления ЦБ: {update_time}")
-
-          # -------------------------------------------------
-          # 2. Находим строку именно для 5 грамм
-          # -------------------------------------------------
-
-          # После "5 грамм" ожидаем:
-          # цена продажи
-          # цена обратного выкупа целой упаковки
-          #
-          # Между ними могут быть |, пробелы, HTML-разметка и т.п.
-
-          gold_pattern = re.compile(
-              r"5\s*грамм"
-              r".{0,300}?"
-              r"([\d][\d\s]*)\s*сум"
-              r".{0,150}?"
-              r"([\d][\d\s]*)\s*сум",
-              re.I
-          )
-
-          gold_match = gold_pattern.search(text)
-
-          if not gold_match:
-              raise RuntimeError(
-                  "ОШИБКА: не найдена строка с ценой золота 5 грамм."
-              )
-
-          def to_number(value):
-              return int(re.sub(r"\D", "", value))
-
-          sell = to_number(gold_match.group(1))
-          buy = to_number(gold_match.group(2))
-
-          if sell <= 0:
-              raise RuntimeError(
-                  f"ОШИБКА: некорректная цена продажи: {sell}"
-              )
-
-          if buy <= 0:
-              raise RuntimeError(
-                  f"ОШИБКА: некорректная цена обратного выкупа: {buy}"
-              )
-
-          print(f"5 г — продажа: {sell:,}".replace(",", " "))
-          print(f"5 г — обратный выкуп: {buy:,}".replace(",", " "))
-
-          # -------------------------------------------------
-          # 3. Загружаем существующий data.json
-          # -------------------------------------------------
-
-          with open("data.json", "r", encoding="utf-8") as file:
-              data = json.load(file)
-
-          history = data.get("history", [])
-
-          # -------------------------------------------------
-          # 4. Создаём запись по дате ЦБ
-          # -------------------------------------------------
+          except (FileNotFoundError, json.JSONDecodeError):
+              pass
 
           new_record = {
-              "date": update_date,
-              "time": update_time,
+              "date": checked_at[:10],
+              "time": checked_at[11:16],
+              "cbu_update_date": update_date,
               "sell": sell,
               "buy": buy
           }
 
-          # Удаляем старую запись за тот же день,
-          # чтобы не было дублей.
-          history = [
-              item
-              for item in history
-              if item.get("date") != update_date
-          ]
+          # Не создаём дубликаты при повторном запуске в тот же день
+          existing_today = False
 
-          history.append(new_record)
+          for item in data["history"]:
+              if (
+                  item.get("date") == new_record["date"]
+                  and item.get("cbu_update_date") == update_date
+              ):
+                  existing_today = True
+                  break
 
-          # Сортировка истории по дате
-          history.sort(
-              key=lambda item: (
-                  item.get("date", ""),
-                  item.get("time", "")
-              )
-          )
+          if not existing_today:
+              data["history"].append(new_record)
 
-          # -------------------------------------------------
-          # 5. Сохраняем данные
-          # -------------------------------------------------
+          # Последние 90 записей
+          data["history"] = data["history"][-90:]
 
-          data["source"] = URL
-
-          # Это именно время обновления ЦБ
-          data["updated"] = cbu_updated
-
-          # Это техническое время проверки GitHub
-          data["checked"] = datetime.now(
-              ZoneInfo("Asia/Tashkent")
-          ).isoformat()
-
-          data["history"] = history
-
-          with open("data.json", "w", encoding="utf-8") as file:
+          with open("data.json", "w", encoding="utf-8") as f:
               json.dump(
                   data,
-                  file,
+                  f,
                   ensure_ascii=False,
                   indent=2
               )
-              file.write("\n")
 
-          print("data.json успешно обновлён.")
-
+          print("data.json обновлён.")
           PY
 
       - name: Commit and push
+        shell: bash
         run: |
-          git config user.name "gold-tracker-bot"
-          git config user.email "actions@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add data.json
 
           if git diff --cached --quiet; then
-            echo "Изменений нет."
-          else
-            git commit -m "Update gold price"
-            git push
+            echo "Изменений нет — commit не требуется."
+            exit 0
           fi
+
+          git commit -m "Update gold prices"
+          git push
