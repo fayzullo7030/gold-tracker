@@ -4,7 +4,6 @@ on:
   schedule:
     # 10:30 Asia/Tashkent (UTC+5)
     - cron: "30 5 * * *"
-
   workflow_dispatch:
 
 permissions:
@@ -15,7 +14,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -24,89 +22,159 @@ jobs:
           python - <<'PY'
           import json
           import re
+          import html
           import urllib.request
           from datetime import datetime
           from zoneinfo import ZoneInfo
+          from html.parser import HTMLParser
 
           URL = "https://cbu.uz/ru/banknotes-coins/gold-bars/prices/"
 
-          print("Получаю данные ЦБ...")
+          class TableParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.rows = []
+                  self.row = None
+                  self.cell = None
 
-          req = urllib.request.Request(
-              URL,
-              headers={
-                  "User-Agent": "Mozilla/5.0 GoldTracker/1.0"
-              }
-          )
+              def handle_starttag(self, tag, attrs):
+                  tag = tag.lower()
 
-          with urllib.request.urlopen(req, timeout=30) as response:
-              html = response.read().decode("utf-8", "ignore")
+                  if tag == "tr":
+                      self.row = []
 
-          print("Страница ЦБ получена.")
+                  elif tag in ("td", "th") and self.row is not None:
+                      self.cell = []
 
-          # Удаляем служебные блоки HTML
-          text = re.sub(
-              r"<script\b[^>]*>.*?</script>",
-              " ",
-              html,
-              flags=re.I | re.S
-          )
+              def handle_data(self, data):
+                  if self.cell is not None:
+                      self.cell.append(data)
 
-          text = re.sub(
-              r"<style\b[^>]*>.*?</style>",
-              " ",
-              text,
-              flags=re.I | re.S
-          )
+              def handle_endtag(self, tag):
+                  tag = tag.lower()
 
-          # Удаляем HTML-теги
-          text = re.sub(r"<[^>]+>", " ", text)
+                  if tag in ("td", "th") and self.cell is not None:
+                      value = " ".join(self.cell)
+                      value = html.unescape(value)
+                      value = re.sub(r"\s+", " ", value).strip()
 
-          # Нормализуем пробелы
-          text = re.sub(r"\s+", " ", text).strip()
+                      self.row.append(value)
+                      self.cell = None
 
-          print("Ищу цену 5-граммового слитка...")
+                  elif tag == "tr" and self.row is not None:
+                      self.rows.append(self.row)
+                      self.row = None
+                      self.cell = None
 
-          # Ищем строку:
-          # 5 грамм | цена продажи | обратный выкуп |
-          #
-          # ВАЖНО:
-          # дата обновления ЦБ здесь НЕ проверяется.
-
-          pattern = (
-              r"5\s*грамм\s+"
-              r"([\d\s\u00a0]+)\s*сум\s+"
-              r"([\d\s\u00a0]+)\s*сум\s+"
-              r"([\d\s\u00a0]+)\s*сум"
-          )
-
-          match = re.search(pattern, text, re.I)
-
-          if not match:
-              raise RuntimeError(
-                  "Не удалось найти строку с ценами 5-граммового "
-                  "золотого слитка на странице ЦБ."
-              )
+          def normalize(value):
+              value = html.unescape(value)
+              value = value.replace("\xa0", " ")
+              value = value.replace("\u202f", " ")
+              value = value.replace("\u200b", "")
+              return re.sub(r"\s+", " ", value).strip().lower()
 
           def to_int(value):
               digits = re.sub(r"\D", "", value)
 
               if not digits:
                   raise ValueError(
-                      f"Не удалось преобразовать значение в число: {value!r}"
+                      f"Не удалось преобразовать цену: {value!r}"
                   )
 
               return int(digits)
 
-          sell = to_int(match.group(1))
-          buy = to_int(match.group(2))
+          print("Получаю данные ЦБ...")
 
-          # Защита от случайного парсинга мусора
-          if sell < 1_000_000 or buy < 1_000_000:
-              raise RuntimeError(
-                  f"Получены подозрительные значения: "
-                  f"sell={sell}, buy={buy}"
+          request = urllib.request.Request(
+              URL,
+              headers={
+                  "User-Agent": "Mozilla/5.0 GoldTracker/1.0",
+                  "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"
+              }
+          )
+
+          with urllib.request.urlopen(request, timeout=30) as response:
+              page = response.read().decode("utf-8", "replace")
+
+          print("Страница ЦБ получена.")
+
+          # Способ 1: извлекаем цены непосредственно из строки таблицы.
+          parser = TableParser()
+          parser.feed(page)
+
+          prices = None
+
+          for row in parser.rows:
+              for index, cell in enumerate(row):
+                  cell_text = normalize(cell)
+
+                  if re.fullmatch(r"5\s*грамм", cell_text):
+                      values = []
+
+                      for price_cell in row[index + 1:]:
+                          if re.search(r"\d", price_cell):
+                              values.append(to_int(price_cell))
+
+                      if len(values) >= 3:
+                          prices = values[:3]
+                          break
+
+              if prices:
+                  break
+
+          # Способ 2: резервный поиск в текстовом содержимом страницы.
+          if not prices:
+              print("Табличный поиск не сработал. Использую резервный поиск...")
+
+              text = re.sub(
+                  r"<script\b[^>]*>.*?</script>",
+                  " ",
+                  page,
+                  flags=re.I | re.S
               )
+
+              text = re.sub(
+                  r"<style\b[^>]*>.*?</style>",
+                  " ",
+                  text,
+                  flags=re.I | re.S
+              )
+
+              text = re.sub(r"<[^>]+>", " ", text)
+              text = html.unescape(text)
+              text = normalize(text)
+
+              match = re.search(r"5\s*грамм", text)
+
+              if match:
+                  segment = text[match.end():match.end() + 500]
+
+                  amounts = re.findall(
+                      r"(\d[\d\s\u00a0\u202f.,]*?)\s*сум",
+                      segment,
+                      flags=re.I
+                  )
+
+                  if len(amounts) >= 3:
+                      prices = [to_int(x) for x in amounts[:3]]
+
+          if not prices:
+              raise RuntimeError(
+                  "Не удалось извлечь цены 5-граммового слитка. "
+                  "Проверьте актуальную структуру страницы ЦБ."
+              )
+
+          # Порядок колонок ЦБ:
+          # 1. Цена продажи
+          # 2. Обратный выкуп в неповреждённой упаковке
+          # 3. Обратный выкуп в повреждённой упаковке
+          sell, buy, buy_damaged = prices
+
+          if not (1_000_000 <= sell <= 100_000_000):
+              raise RuntimeError(f"Подозрительная цена продажи: {sell}")
+
+          if not (1_000_000 <= buy <= 100_000_000):
+              raise RuntimeError(f"Подозрительная цена выкупа: {buy}")
 
           now = datetime.now(ZoneInfo("Asia/Tashkent"))
 
@@ -120,11 +188,11 @@ jobs:
           print(f"Дата проверки: {row['date']} {row['time']}")
           print(f"Цена продажи: {sell:,} сум")
           print(f"Обратный выкуп: {buy:,} сум")
+          print(f"Выкуп повреждённого слитка: {buy_damaged:,} сум")
 
-          # Загружаем существующую историю
           try:
-              with open("data.json", "r", encoding="utf-8") as f:
-                  data = json.load(f)
+              with open("data.json", "r", encoding="utf-8") as file:
+                  data = json.load(file)
           except FileNotFoundError:
               data = {
                   "source": URL,
@@ -132,30 +200,27 @@ jobs:
               }
 
           # Одна запись на день.
-          # Если workflow запускается повторно в тот же день,
-          # сегодняшняя запись заменяется.
+          # Повторный запуск заменяет запись за текущую дату.
           history = [
-              x for x in data.get("history", [])
-              if x.get("date") != row["date"]
+              item for item in data.get("history", [])
+              if item.get("date") != row["date"]
           ]
 
           history.append(row)
-
-          # Сначала старые даты, в конце сегодняшняя
-          history.sort(key=lambda x: x.get("date", ""))
+          history.sort(key=lambda item: item.get("date", ""))
 
           data["source"] = URL
           data["updated"] = now.isoformat()
           data["history"] = history
 
-          with open("data.json", "w", encoding="utf-8") as f:
+          with open("data.json", "w", encoding="utf-8") as file:
               json.dump(
                   data,
-                  f,
+                  file,
                   ensure_ascii=False,
                   indent=2
               )
-              f.write("\n")
+              file.write("\n")
 
           print("data.json успешно обновлён.")
           PY
