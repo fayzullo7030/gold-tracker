@@ -2,8 +2,8 @@ name: Update gold prices
 
 on:
   schedule:
-    # 10:30 Asia/Tashkent (UTC+5)
-    - cron: "30 5 * * *"
+    - cron: "17 10 * * *"
+      timezone: "Asia/Tashkent"
   workflow_dispatch:
 
 permissions:
